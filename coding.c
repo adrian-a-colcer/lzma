@@ -3,28 +3,36 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-
-int code = 0;
-int low = 0;
-int range = 100000;
+/*
+struct CRangeDecoder
+{
+  uint32_t range;
+  uint32_t code;
+  uint8_t *stream; // check diff type
+};
+*/
 
 /*
-* Contextual Probability
-2^11 = 2048 ()
-
+* (From lzma-specification)
+* Each probability value must be initialized with value ((1 << 11) / 2),
+* that represents the state, where probabilities of symbols 0 and 1 
+* are equal to 0.5:
 */
-uint16_t Cprob = ;
 
-void AppendDigit()
-{
-
-}
+// uint16_t Cprob = ((1 << 11) / 2);
 
 int main()
 {
-    char string[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam.";
+  char string[] = "Hello world.\n"; // 14 character in total
 
+  // simple range coder
+  int code = 0;
+  int low = 0;
+  int range = 1;
 
+  for (int i = 0; string[i] != '\0'; i++) {
+    printf("%c",string[i]);
+  }
 
-    return 0
+  return 0;
 }
