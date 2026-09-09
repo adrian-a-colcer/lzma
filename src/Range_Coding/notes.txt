@@ -1,0 +1,6 @@
+Lzma uses adaptive probability for range coding.
+using fixed point representation in 11 bits (probBits).
+Probability is a multiple of 1/2^11.
+Initialising the probability at 50% then adapting,
+nudging in the direction of previously encountered 1,0
++- 2048 date

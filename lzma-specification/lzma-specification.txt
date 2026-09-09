@@ -28,7 +28,6 @@ The lzma file contains the raw LZMA stream and the header with related propertie
 The files in that format use ".lzma" extension.
 
 The lzma file format layout:
-
 Offset Size Description
 
   0     1   LZMA model properties (lc, lp, pb) in encoded form
@@ -447,6 +446,7 @@ The better prediction provides better compression ratio.
 The Bit Probability Model uses statistical data of previous decoded
 symbols.
 
+
 That estimated probability is presented as 11-bit unsigned integer value
 that represents the probability of symbol "0".
 
@@ -498,7 +498,7 @@ unsigned CRangeDecoder::DecodeBit(CProb *prob)
   else
   {
     v -= v >> kNumMoveBits;
-    Code -= bound;
+    Code -= bound; 
     Range -= bound;
     symbol = 1;
   }
