@@ -8,6 +8,54 @@
 #define LZMA_DIC_MIN (1 << 12)
 #define IN_BUF_SIZE (64 * 1024)
 
+#define kNumPosBitsMax 4
+#define kNumPosStatesMax (1 << kNumPosBitsMax)
+
+#define kLenNumLowBits 3
+#define kLenNumLowSymbols (1 << kLenNumLowBits)
+#define kLenNumHighBits 8
+#define kLenNumHighSymbols (1 << kLenNumHighBits)
+
+#define LenLow 0
+#define LenHigh (LenLow + 2 * (kNumPosStatesMax << kLenNumLowBits))
+#define kNumLenProbs (LenHigh + kLenNumHighSymbols)
+
+#define LenChoice LenLow
+#define LenChoice2 (LenLow + (1 << kLenNumLowBits))
+
+#define kNumStates 12
+#define kNumStates2 16
+#define kNumLitStates 7
+
+#define kStartPosModelIndex 4
+#define kEndPosModelIndex 14
+#define kNumFullDistances (1 << (kEndPosModelIndex >> 1))
+
+#define kNumPosSlotBits 6
+#define kNumLenToPosStates 4
+
+#define kNumAlignBits 4
+#define kAlignTableSize (1 << kNumAlignBits)
+
+#define kMatchMinLen 2
+#define kMatchSpecLenStart (kMatchMinLen + kLenNumLowSymbols * 2 + kLenNumHighSymbols)
+
+#define kStartOffset 1664
+#define GET_PROBS p->probs_1664
+
+#define SpecPos (-kStartOffset)
+#define IsRep0Long (SpecPos + kNumFullDistances)
+#define RepLenCoder (IsRep0Long + (kNumStates2 << kNumPosBitsMax))
+#define LenCoder (RepLenCoder + kNumLenProbs)
+#define IsMatch (LenCoder + kNumLenProbs)
+#define Align (IsMatch + (kNumStates2 << kNumPosBitsMax))
+#define IsRep (Align + kAlignTableSize)
+#define IsRepG0 (IsRep + kNumStates)
+#define IsRepG1 (IsRepG0 + kNumStates)
+#define IsRepG2 (IsRepG1 + kNumStates)
+#define PosSlot (IsRepG2 + kNumStates)
+#define Literal (PosSlot + (kNumLenToPosStates << kNumPosSlotBits))
+#define NUM_BASE_PROBS (Literal + kStartOffset)
 // Markov chain states
 /*
 State   Types of previous sequences
@@ -25,24 +73,6 @@ State   Types of previous sequences
    10      !literal, match
    11      !literal, (rep or shortrep)
 */
-#define NUM_STATES 12
-#define StartOffset 1664
-
-#define SpecPos (-StartOffset)
-#define IsRep0Long (SpecPos + kNumFullDistances)
-#define RepLenCoder (IsRep0Long + (kNumStates2 << kNumPosBitsMax))
-#define LenCoder (RepLenCoder + kNumLenProbs)
-#define IsMatch (LenCoder + kNumLenProbs)
-#define Align (IsMatch + (kNumStates2 << kNumPosBitsMax))
-#define IsRep (Align + kAlignTableSize)
-#define IsRepG0 (IsRep + NUM_STATES)
-#define IsRepG1 (IsRepG0 + NUM_STATES)
-#define IsRepG2 (IsRepG1 + NUM_STATES)
-#define PosSlot (IsRepG2 + NUM_STATES)
-#define Literal (PosSlot + (kNumLenToPosStates << kNumPosSlotBits))
-
-typedef enum {false, true} bool;
-
 // state (probabilities and MRUD)
 // State, 12 values, markov chain
 
@@ -52,9 +82,9 @@ typedef enum {false, true} bool;
 * Position bits: how many low bits of the decoder position do we care about
 */
 typedef struct {
-  uint8_t lc; // Literal context bits
-  uint8_t lp; // Literal position bits
-  uint8_t pb; // Position bits
+  uint8_t lc; // Literal context bits, how many of the high bits of the previous uncompressed byte to use
+  uint8_t lp; // Literal position bits, how many of the low bits of the current uncompressed position to use
+  uint8_t pb; // Position bits, how many of the low bits of the current uncompressed position to use for the match distance
   uint8_t padding; // padding for alignment
   uint32_t dictSize; // Dictionary size
 } lzma_props;
@@ -63,8 +93,12 @@ typedef struct {
   uint32_t range;
   uint32_t code;
 
+  uint16_t *probs;
+  uint32_t num_probs;
+  uint32_t state;
+
   FILE *file;
-  bool eof;
+  int eof;
   uint8_t in[IN_BUF_SIZE];
   size_t limit;
   size_t pos;
@@ -74,7 +108,7 @@ typedef struct {
   uint8_t *buf;
   uint32_t pos;
   uint32_t size;
-  bool is_full;
+  int is_full;
 } out_window;
 
 inline uint8_t rd_get_byte(range_decoder *rd) {
@@ -83,7 +117,7 @@ inline uint8_t rd_get_byte(range_decoder *rd) {
     rd->limit = fread(rd->in, 1, IN_BUF_SIZE, rd->file);
     rd->pos = 0;
     if (rd->limit == 0) {
-      rd->eof = true;
+      rd->eof = 1;
       return 0xFF;
     }
   }
@@ -94,7 +128,7 @@ void range_decoder_init(range_decoder *rd, FILE *f) {
   rd->range = 0xFFFFFFFF;
   rd->code = 0;
   rd->file = f;
-  rd->eof = false;
+  rd->eof = 0;
   rd->pos = 0;
   rd->limit = 0;
 }
@@ -112,7 +146,7 @@ int out_window_init(out_window *win, size_t size) {
     return -1;
   }
 
-  win->is_full = false;
+  win->is_full = 0;
   win->pos = 0;
   return 0;
 }
@@ -148,6 +182,36 @@ int decode_properties(lzma_props *props, const uint8_t *data)
 
   return 0;
 }
+/*
+
+TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO 
+finish range coding implementation
+follow the LZMA SDK reference implementation to complete the decoder
+- take a look at renormalizaiton
+- why is range shifted by 8 bits? 
+
+
+*/
+int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncompressed_size, int knownUncompSize) {
+  unsigned pbMask = ((unsigned)1 << (props->pb)) - 1;
+  unsigned lpMask = ((unsigned)0x100 << props->lp) - ((unsigned)0x100 >> props->lc);
+  do {
+    uint16_t *prob;
+    unsigned positionState = (((rd->pos) & (pbMask)) << 4);
+    unsigned temp;
+
+    // literal or match?
+    prob = rd->probs + IsMatch + positionState + rd->state;
+
+    temp = *(prob);
+
+    // Normalize range and code
+
+
+  } while (win->pos < win->size && rd->in < rd->limit);
+  return 0;
+
+}
 
 int main(int argc, char *argv[]) {
 
@@ -175,15 +239,16 @@ int main(int argc, char *argv[]) {
     perror("I/O error when reading");
   }
 
-  lzma_props *props;
-  if (decode_properties(props, header)) {
+  lzma_props props;
+
+  if (decode_properties(&props, header) != 0) {
     fprintf(stderr, "Error: Failed to decode LZMA properties.\n");
     fclose(fptr);
     return EXIT_FAILURE;
   }
 
-  printf("\nlc=%d, lp=%d, pb=%d", props->lc, props->lp, props->pb);
-  printf("\nDictionary Size in properties = %u", props->dictSize);
+  printf("\nlc=%d, lp=%d, pb=%d", props.lc, props.lp, props.pb);
+  printf("\nDictionary Size in properties = %u", props.dictSize);
 
   uint64_t uncompressed_size;
   for (int i = 0; i < 8; i++) {
@@ -193,19 +258,17 @@ int main(int argc, char *argv[]) {
   // All 0xFF means unknown unknown uncompressed size (at the moment)
   // EOS marker is mandatory.
   // If not all 0xFF, EOS is optional
-  bool knownUncompSize = (uncompressed_size != (int64_t)-1);
+  int knownUncompSize = (uncompressed_size != (int64_t)-1);
 
-  range_decoder *rd;
-  range_decoder_init(rd, fptr);
+  range_decoder rd;
+  range_decoder_init(&rd, fptr);
 
-    
-  out_window *win;
-  out_window_init(win, props->dictSize);
+  out_window win;
+  out_window_init(&win, props.dictSize);
 
-  size_t num_probs = (StartOffset + (768 << (props->lc + props->lp)));
-  uint16_t *probs;
+  size_t num_probs = (kStartOffset + (768 << (props.lc + props.lp)));
 
   fclose(fptr);
-  free(win->buf);
+  free(win.buf);
   return 0;
 }
