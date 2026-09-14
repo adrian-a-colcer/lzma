@@ -8,6 +8,13 @@
 #define LZMA_DIC_MIN (1 << 12)
 #define IN_BUF_SIZE (64 * 1024)
 
+#define kNumBitModelTotalBits 11
+#define kBitModelTotal (1 << kNumBitModelTotalBits)
+#define kNumMoveBits 5
+
+#define kNumTopBits 24
+#define kTopValue ((uint32_t)1 << kNumTopBits)
+
 #define kNumPosBitsMax 4
 #define kNumPosStatesMax (1 << kNumPosBitsMax)
 
@@ -111,19 +118,6 @@ typedef struct {
   int is_full;
 } out_window;
 
-inline uint8_t rd_get_byte(range_decoder *rd) {
-  if (rd->pos >= rd->limit) {
-    if (rd->eof) return 0xFF;
-    rd->limit = fread(rd->in, 1, IN_BUF_SIZE, rd->file);
-    rd->pos = 0;
-    if (rd->limit == 0) {
-      rd->eof = 1;
-      return 0xFF;
-    }
-  }
-  return rd->in[rd->pos++];
-}
-
 void range_decoder_init(range_decoder *rd, FILE *f) {
   rd->range = 0xFFFFFFFF;
   rd->code = 0;
@@ -191,21 +185,55 @@ follow the LZMA SDK reference implementation to complete the decoder
 - why is range shifted by 8 bits? 
 
 
+
 */
 int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncompressed_size, int knownUncompSize) {
   unsigned pbMask = ((unsigned)1 << (props->pb)) - 1;
   unsigned lpMask = ((unsigned)0x100 << props->lp) - ((unsigned)0x100 >> props->lc);
   do {
     uint16_t *prob;
+    uint32_t bound;
     unsigned positionState = (((rd->pos) & (pbMask)) << 4);
     unsigned temp;
 
     // literal or match?
     prob = rd->probs + IsMatch + positionState + rd->state;
 
-    temp = *(prob);
+    // Normalize - range becomes too small
+    if (rd->range < kTopValue) {
+      rd->range <<= 8;
+      rd->code = (rd->code << 8) | rd->in[rd->pos++];
+    }
+    // get bound for 0/1 
+    /*
+    portion the range into two parts based on probability of 0/1
+    shift range left by 11 bits (since probabilities are stored as 11-bit values) to get unit range,
+    then multiply by the probability of 0 (prob[0]) to get the bound for 0
+    */
+    bound = (rd->range >> 11) * (uint32_t)(*(prob));
 
-    // Normalize range and code
+    // first bit 0/1 : literal or match
+    if (rd->code < bound) {
+      // first bit zero
+      rd->range = bound;
+      *(prob) = (uint16_t)(*(prob) + ((kBitModelTotal - *(prob)) >> kNumMoveBits));
+
+      // literal probabilities
+      prob = rd->probs + Literal;
+
+
+
+
+
+
+
+    } else {
+      // first bit one
+      rd->range -= bound;
+      rd->code -= bound;
+      *(prob) = (uint16_t)(*(prob) - (*(prob) >> kNumMoveBits));
+
+    }
 
 
   } while (win->pos < win->size && rd->in < rd->limit);
