@@ -88,6 +88,7 @@ State   Types of previous sequences
 * Literal position: tracks an array of (1 << lp) byteProbs
 * Position bits: how many low bits of the decoder position do we care about
 */
+
 typedef struct {
   uint8_t lc; // Literal context bits, how many of the high bits of the previous uncompressed byte to use
   uint8_t lp; // Literal position bits, how many of the low bits of the current uncompressed position to use
@@ -176,17 +177,28 @@ int decode_properties(lzma_props *props, const uint8_t *data)
 
   return 0;
 }
-/*
 
-TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO 
-finish range coding implementation
-follow the LZMA SDK reference implementation to complete the decoder
-- take a look at renormalizaiton
-- why is range shifted by 8 bits? 
+static inline int dec_bit(range_decoder *rd, uint16_t *prob) {
+  if (rd->range < kTopValue) {
+    rd->range <<= 8; 
+    rd->code = (rd->code << 8) | rd->in[rd->pos++];
+  }
+
+  uint32_t bound = (rd->range >> 11) * (uint32_t)(*(prob));
+
+  if (rd->code < bound) {
+    rd->range = bound;
+    *(prob) = (uint16_t)(*(prob) + ((kBitModelTotal - *(prob)) >> kNumMoveBits));
+
+  } else {
+    rd->range -= bound;
+    rd->code -= bound;
 
 
+  }
 
-*/
+}
+
 int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncompressed_size, int knownUncompSize) {
   unsigned pbMask = ((unsigned)1 << (props->pb)) - 1;
   unsigned lpMask = ((unsigned)0x100 << props->lp) - ((unsigned)0x100 >> props->lc);
@@ -220,12 +232,21 @@ int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncom
 
       // literal probabilities
       prob = rd->probs + Literal;
+      if (rd->pos != 0) {
+        prob += (uint32_t)3 * ((((rd->pos << 8) + win->buf[(win->pos == 0 ? win->size: win->pos) - 1]) & lpMask) << props->lc);
+      }
+      rd->pos++;
 
+      if (rd->state < kNumLitStates) {
+        rd->state = (rd->state < 4) ? rd->state : (rd->state - 3); 
 
+        uint32_t symbol = 1;
 
+        do { symbol = (symbol << 1) | dec_bit(rd, prob + symbol); }while (symbol < 0x100);
 
-
-
+      } else {
+        unsigned matchByte = win->buf[win->pos - 
+      }
 
     } else {
       // first bit one
@@ -234,6 +255,7 @@ int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncom
       *(prob) = (uint16_t)(*(prob) - (*(prob) >> kNumMoveBits));
 
     }
+
 
 
   } while (win->pos < win->size && rd->in < rd->limit);
