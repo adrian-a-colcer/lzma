@@ -54,8 +54,8 @@
 #define IsRep0Long (SpecPos + kNumFullDistances)
 #define RepLenCoder (IsRep0Long + (kNumStates2 << kNumPosBitsMax))
 #define LenCoder (RepLenCoder + kNumLenProbs)
-#define IsMatch (LenCoder + kNumLenProbs)
-#define Align (IsMatch + (kNumStates2 << kNumPosBitsMax))
+#define Match (LenCoder + kNumLenProbs)
+#define Align (Match + (kNumStates2 << kNumPosBitsMax))
 #define IsRep (Align + kAlignTableSize)
 #define IsRepG0 (IsRep + kNumStates)
 #define IsRepG1 (IsRepG0 + kNumStates)
@@ -178,25 +178,36 @@ int decode_properties(lzma_props *props, const uint8_t *data)
   return 0;
 }
 
-static inline int dec_bit(range_decoder *rd, uint16_t *prob) {
+
+
+static inline unsigned dec_bit(range_decoder *rd, uint16_t *prob) {
+  // Normalize - range becomes too small
   if (rd->range < kTopValue) {
     rd->range <<= 8; 
     rd->code = (rd->code << 8) | rd->in[rd->pos++];
   }
 
+  /*
+    portion the range into two parts based on probability of 0/1
+    shift range left by 11 bits (since probabilities are stored as 11-bit values) to get unit range,
+    then multiply by the probability of 0 (prob[0]) to get the bound for 0
+  */
   uint32_t bound = (rd->range >> 11) * (uint32_t)(*(prob));
 
   if (rd->code < bound) {
     rd->range = bound;
     *(prob) = (uint16_t)(*(prob) + ((kBitModelTotal - *(prob)) >> kNumMoveBits));
 
+    return 0;
+
   } else {
     rd->range -= bound;
     rd->code -= bound;
 
+    *(prob) = (uint16_t)(*(prob) - (*(prob) >> kNumMoveBits));
 
+    return 1;
   }
-
 }
 
 int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncompressed_size, int knownUncompSize) {
@@ -209,26 +220,14 @@ int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncom
     unsigned temp;
 
     // literal or match?
-    prob = rd->probs + IsMatch + positionState + rd->state;
-
-    // Normalize - range becomes too small
-    if (rd->range < kTopValue) {
-      rd->range <<= 8;
-      rd->code = (rd->code << 8) | rd->in[rd->pos++];
-    }
-    // get bound for 0/1 
-    /*
-    portion the range into two parts based on probability of 0/1
-    shift range left by 11 bits (since probabilities are stored as 11-bit values) to get unit range,
-    then multiply by the probability of 0 (prob[0]) to get the bound for 0
-    */
-    bound = (rd->range >> 11) * (uint32_t)(*(prob));
+    prob = rd->probs + Match + positionState + rd->state;
 
     // first bit 0/1 : literal or match
-    if (rd->code < bound) {
-      // first bit zero
-      rd->range = bound;
-      *(prob) = (uint16_t)(*(prob) + ((kBitModelTotal - *(prob)) >> kNumMoveBits));
+    unsigned isMatch = dec_bit(rd, prob);
+
+    if (isMatch == 0) {
+      // 
+      uint32_t symbol;
 
       // literal probabilities
       prob = rd->probs + Literal;
@@ -237,26 +236,25 @@ int decode(range_decoder *rd, out_window *win, lzma_props *props, uint64_t uncom
       }
       rd->pos++;
 
+      // Last decoded byte was a literal
       if (rd->state < kNumLitStates) {
         rd->state = (rd->state < 4) ? rd->state : (rd->state - 3); 
 
-        uint32_t symbol = 1;
-
         do { symbol = (symbol << 1) | dec_bit(rd, prob + symbol); }while (symbol < 0x100);
 
+        // state > 6: last byte was a dictionary match
+        // this is still literal decoding, 
       } else {
         unsigned matchByte = win->buf[win->pos - 
       }
 
+      win->buf[win->pos++] = (uint8_t)symbol;
     } else {
       // first bit one
       rd->range -= bound;
       rd->code -= bound;
       *(prob) = (uint16_t)(*(prob) - (*(prob) >> kNumMoveBits));
-
     }
-
-
 
   } while (win->pos < win->size && rd->in < rd->limit);
   return 0;
